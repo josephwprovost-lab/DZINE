@@ -1,7 +1,7 @@
 {
   "name": "dzine-mcp",
   "version": "1.0.0",
-  "description": "MCP server for DZINE AI - AI-powered image generation and design tool",
+  "description": "MCP server for DZINE AI - Browser automation with Playwright",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
@@ -12,7 +12,9 @@
     "watch": "tsc --watch",
     "start": "node dist/index.js",
     "dev": "ts-node src/index.ts",
-    "prepare": "npm run build"
+    "login": "node dist/login.js",
+    "prepare": "npm run build",
+    "postinstall": "npx playwright install chromium"
   },
   "keywords": [
     "mcp",
@@ -21,12 +23,14 @@
     "image-generation",
     "text-to-image",
     "style-transfer",
-    "image-editing"
+    "playwright",
+    "browser-automation"
   ],
   "author": "",
   "license": "MIT",
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.0.0"
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "playwright": "^1.40.0"
   },
   "devDependencies": {
     "@types/node": "^20.10.0",

@@ -1,6 +1,6 @@
-# DZINE AI MCP Server
+# DZINE AI MCP Server (Browser Automation)
 
-A Model Context Protocol (MCP) server that provides tools for interacting with [DZINE AI](https://www.dzine.ai/) - an AI-powered image generation and design platform.
+A Model Context Protocol (MCP) server that uses Playwright to automate [DZINE AI](https://www.dzine.ai/) with your existing Google login. No API key required!
 
 ## Features
 
@@ -8,22 +8,24 @@ This MCP server provides the following tools:
 
 | Tool | Description |
 |------|-------------|
+| `dzine_login` | Check login status or get login instructions |
 | `dzine_text_to_image` | Generate images from text descriptions |
 | `dzine_image_to_image` | Transform existing images based on prompts |
 | `dzine_style_transfer` | Apply visual styles from one image to another |
 | `dzine_remove_background` | Remove backgrounds from images |
-| `dzine_edit_image` | Edit images with AI (inpaint, outpaint, remove, replace) |
-| `dzine_upscale` | Upscale images to higher resolution |
 | `dzine_get_styles` | List available style presets |
-| `dzine_get_task_status` | Check async task status |
-| `dzine_get_account` | Get account info and credits |
+| `dzine_screenshot` | Take a screenshot for debugging |
+
+## How It Works
+
+Instead of using an API key, this MCP uses Playwright to automate the DZINE AI website in a browser. Your Google login session is saved locally, so you only need to log in once.
 
 ## Installation
 
 ### Prerequisites
 
 - Node.js 18 or higher
-- A DZINE AI API key (get one at [dzine.ai/api](https://www.dzine.ai/api/))
+- A Google account with access to DZINE AI
 
 ### Install from source
 
@@ -34,16 +36,27 @@ npm install
 npm run build
 ```
 
-## Configuration
+This will automatically install Playwright and the Chromium browser.
 
-### Environment Variables
+## Setup
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `DZINE_API_KEY` | Yes | Your DZINE AI API key |
-| `DZINE_BASE_URL` | No | Custom API base URL (default: `https://api.dzine.ai/v1`) |
+### Step 1: Log in to DZINE AI
 
-### Claude Desktop Configuration
+Before using the MCP server, you need to log in once:
+
+```bash
+npm run login
+```
+
+This opens a browser window where you can:
+1. Go to dzine.ai
+2. Click "Sign In"
+3. Log in with your Google account
+4. Close the browser when done
+
+Your login session is saved in `~/.dzine-mcp/browser-data/` and will be reused automatically.
+
+### Step 2: Configure Claude Desktop
 
 Add to your Claude Desktop config (`~/Library/Application Support/Claude/claude_desktop_config.json` on macOS or `%APPDATA%\Claude\claude_desktop_config.json` on Windows):
 
@@ -52,18 +65,29 @@ Add to your Claude Desktop config (`~/Library/Application Support/Claude/claude_
   "mcpServers": {
     "dzine": {
       "command": "node",
-      "args": ["/path/to/dzine-mcp/dist/index.js"],
-      "env": {
-        "DZINE_API_KEY": "your-api-key-here"
-      }
+      "args": ["/path/to/dzine-mcp/dist/index.js"]
     }
   }
 }
 ```
 
-### Claude Code Configuration
+### Step 3: Verify Login
 
-Add to your Claude Code MCP settings:
+In Claude, ask it to check your DZINE login status:
+
+```
+Check if I'm logged into DZINE
+```
+
+## Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DZINE_HEADLESS` | `true` | Set to `false` to see the browser |
+| `DZINE_USER_DATA_DIR` | `~/.dzine-mcp/browser-data` | Browser profile directory |
+| `DZINE_OUTPUT_DIR` | `~/dzine-output` | Where generated images are saved |
+
+### Running with visible browser (for debugging)
 
 ```json
 {
@@ -72,7 +96,7 @@ Add to your Claude Code MCP settings:
       "command": "node",
       "args": ["/path/to/dzine-mcp/dist/index.js"],
       "env": {
-        "DZINE_API_KEY": "your-api-key-here"
+        "DZINE_HEADLESS": "false"
       }
     }
   }
@@ -84,40 +108,34 @@ Add to your Claude Code MCP settings:
 ### Generate an image from text
 
 ```
-Use dzine_text_to_image to create a beautiful sunset over mountains with a lake in the foreground, in a realistic style
+Use DZINE to generate a beautiful sunset over mountains with a lake in the foreground
 ```
 
 ### Transform an existing image
 
 ```
-Use dzine_image_to_image with this image URL and transform it to look like a watercolor painting
+Use DZINE to transform /path/to/my/photo.jpg to look like a watercolor painting
 ```
 
 ### Apply style transfer
 
 ```
-Use dzine_style_transfer to apply the style from Van Gogh's Starry Night to my photo
+Use DZINE style transfer to apply the style from /path/to/starry-night.jpg to /path/to/my-photo.jpg
 ```
 
 ### Remove background
 
 ```
-Use dzine_remove_background on this product photo to get a transparent PNG
-```
-
-### Edit an image
-
-```
-Use dzine_edit_image to remove the person from the background of this photo
-```
-
-### Upscale an image
-
-```
-Use dzine_upscale to increase this image resolution by 4x
+Use DZINE to remove the background from /path/to/product-photo.jpg
 ```
 
 ## Tool Details
+
+### dzine_login
+
+Check login status or get instructions for logging in.
+
+**Parameters:** None
 
 ### dzine_text_to_image
 
@@ -129,9 +147,6 @@ Generate images from text descriptions.
 - `style`: Style preset (e.g., "anime", "realistic", "artistic")
 - `width`: Image width in pixels (default: 1024)
 - `height`: Image height in pixels (default: 1024)
-- `num_images`: Number of images to generate (1-4)
-- `seed`: Random seed for reproducibility
-- `guidance_scale`: Prompt adherence (1-20, default: 7.5)
 
 ### dzine_image_to_image
 
@@ -139,69 +154,57 @@ Transform an existing image based on a prompt.
 
 **Parameters:**
 - `prompt` (required): How to transform the image
-- `image_url`: URL of the source image
-- `image_base64`: Base64-encoded source image
-- `negative_prompt`: Things to avoid
+- `image_path` (required): Local path to the source image
 - `style`: Style preset to apply
 - `strength`: Transformation intensity (0-1, default: 0.75)
-- `seed`: Random seed
 
 ### dzine_style_transfer
 
 Apply the visual style of one image to another.
 
 **Parameters:**
-- `content_image_url`: URL of the content image
-- `content_image_base64`: Base64-encoded content image
-- `style_image_url`: URL of the style reference
-- `style_image_base64`: Base64-encoded style reference
+- `content_image_path` (required): Path to the content image
+- `style_image_path` (required): Path to the style reference image
 - `style_intensity`: Style strength (0-1, default: 0.8)
-- `preserve_color`: Keep original colors (default: false)
 
 ### dzine_remove_background
 
 Remove the background from an image.
 
 **Parameters:**
-- `image_url`: URL of the image
-- `image_base64`: Base64-encoded image
-- `output_format`: Output format - "png" or "webp" (default: png)
-
-### dzine_edit_image
-
-Edit an image with AI assistance.
-
-**Parameters:**
-- `prompt` (required): Description of the edit
-- `image_url`: URL of the image
-- `image_base64`: Base64-encoded image
-- `mask_url`: URL of the mask (white = edit area)
-- `mask_base64`: Base64-encoded mask
-- `edit_type`: Type of edit - "inpaint", "outpaint", "remove", "replace"
-
-### dzine_upscale
-
-Upscale an image to higher resolution.
-
-**Parameters:**
-- `image_url`: URL of the image
-- `image_base64`: Base64-encoded image
-- `scale`: Upscale factor - 2 or 4 (default: 2)
+- `image_path` (required): Path to the image file
 
 ### dzine_get_styles
 
 Get available style presets. No parameters required.
 
-### dzine_get_task_status
+### dzine_screenshot
 
-Check the status of an async generation task.
+Take a screenshot of the current browser state.
 
 **Parameters:**
-- `task_id` (required): The task ID from a generation request
+- `output_name`: Name for the screenshot file (default: "dzine-screenshot")
 
-### dzine_get_account
+## Output
 
-Get account information and remaining credits. No parameters required.
+Generated images are saved to `~/dzine-output/` by default. You can change this with the `DZINE_OUTPUT_DIR` environment variable.
+
+## Troubleshooting
+
+### "Not logged in" error
+
+Run `npm run login` to open a browser and log in with your Google account.
+
+### Browser automation not working
+
+The DZINE website may have changed. Try:
+1. Run with `DZINE_HEADLESS=false` to see what's happening
+2. Use `dzine_screenshot` to capture the current state
+3. Report issues at the repository
+
+### Images not generating
+
+DZINE uses a credit system. Make sure your account has available credits.
 
 ## Development
 
@@ -215,13 +218,16 @@ npm run build
 # Watch mode
 npm run watch
 
-# Run directly with ts-node
-npm run dev
+# Run login helper
+npm run login
 ```
 
-## API Notes
+## Notes
 
-This MCP server is designed to work with DZINE AI's API. The actual API endpoints and parameters may need adjustment based on DZINE's official API documentation. Please refer to [dzine.ai/api](https://www.dzine.ai/api/) for the most up-to-date API specifications.
+- This MCP uses browser automation, which may be slower than a direct API
+- The DZINE website UI may change, requiring updates to the automation code
+- Your login session is stored locally and not shared
+- Generated images are downloaded and saved locally
 
 ## License
 

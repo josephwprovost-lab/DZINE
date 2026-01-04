@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 
 /**
- * DZINE AI MCP Server
+ * DZINE AI MCP Server (Browser Automation)
  *
- * A Model Context Protocol server that provides tools for interacting with
- * DZINE AI's image generation and editing capabilities.
+ * A Model Context Protocol server that uses Playwright to automate
+ * the DZINE AI website with your Google login.
  */
 
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
@@ -14,29 +14,39 @@ import {
   ListToolsRequestSchema,
   Tool,
 } from '@modelcontextprotocol/sdk/types.js';
-import { DzineClient } from './dzine-client.js';
+import { DzineBrowser } from './dzine-browser.js';
+import * as path from 'path';
+import * as os from 'os';
+import * as fs from 'fs';
 
-// Get API key from environment
-const DZINE_API_KEY = process.env.DZINE_API_KEY;
-const DZINE_BASE_URL = process.env.DZINE_BASE_URL;
-
-if (!DZINE_API_KEY) {
-  console.error('Error: DZINE_API_KEY environment variable is required');
-  console.error('Please set your DZINE API key: export DZINE_API_KEY=your_api_key');
-  process.exit(1);
-}
-
-// Initialize the DZINE client
-const dzineClient = new DzineClient({
-  apiKey: DZINE_API_KEY,
-  baseUrl: DZINE_BASE_URL,
+// Initialize the browser automation client
+const dzineBrowser = new DzineBrowser({
+  headless: process.env.DZINE_HEADLESS !== 'false',
+  userDataDir: process.env.DZINE_USER_DATA_DIR,
 });
+
+// Output directory for downloaded images
+const OUTPUT_DIR = process.env.DZINE_OUTPUT_DIR || path.join(os.homedir(), 'dzine-output');
+
+// Ensure output directory exists
+if (!fs.existsSync(OUTPUT_DIR)) {
+  fs.mkdirSync(OUTPUT_DIR, { recursive: true });
+}
 
 // Define available tools
 const tools: Tool[] = [
   {
+    name: 'dzine_login',
+    description: 'Check login status or get instructions for logging in to DZINE AI with your Google account. Run this first if you haven\'t logged in yet.',
+    inputSchema: {
+      type: 'object',
+      properties: {},
+      required: [],
+    },
+  },
+  {
     name: 'dzine_text_to_image',
-    description: 'Generate images from text descriptions using DZINE AI. Creates high-quality images based on your prompt with optional style selection.',
+    description: 'Generate images from text descriptions using DZINE AI. Creates high-quality images based on your prompt.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -62,29 +72,13 @@ const tools: Tool[] = [
           description: 'Image height in pixels (default: 1024)',
           default: 1024,
         },
-        num_images: {
-          type: 'number',
-          description: 'Number of images to generate (1-4)',
-          default: 1,
-          minimum: 1,
-          maximum: 4,
-        },
-        seed: {
-          type: 'number',
-          description: 'Random seed for reproducible results',
-        },
-        guidance_scale: {
-          type: 'number',
-          description: 'How closely to follow the prompt (1-20, default: 7.5)',
-          default: 7.5,
-        },
       },
       required: ['prompt'],
     },
   },
   {
     name: 'dzine_image_to_image',
-    description: 'Transform an existing image based on a text prompt. Reimagine or modify images while preserving key elements.',
+    description: 'Transform an existing image based on a text prompt. Upload an image and describe how to change it.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -92,17 +86,9 @@ const tools: Tool[] = [
           type: 'string',
           description: 'Text description of how to transform the image',
         },
-        image_url: {
+        image_path: {
           type: 'string',
-          description: 'URL of the source image to transform',
-        },
-        image_base64: {
-          type: 'string',
-          description: 'Base64-encoded source image (alternative to image_url)',
-        },
-        negative_prompt: {
-          type: 'string',
-          description: 'Things to avoid in the transformed image',
+          description: 'Local file path to the source image',
         },
         style: {
           type: 'string',
@@ -113,132 +99,45 @@ const tools: Tool[] = [
           description: 'How much to transform the image (0-1, higher = more change)',
           default: 0.75,
         },
-        seed: {
-          type: 'number',
-          description: 'Random seed for reproducible results',
-        },
       },
-      required: ['prompt'],
+      required: ['prompt', 'image_path'],
     },
   },
   {
     name: 'dzine_style_transfer',
-    description: 'Apply the visual style of one image to another. Transfer artistic styles, color palettes, or textures between images.',
+    description: 'Apply the visual style of one image to another. Transfer artistic styles, color palettes, or textures.',
     inputSchema: {
       type: 'object',
       properties: {
-        content_image_url: {
+        content_image_path: {
           type: 'string',
-          description: 'URL of the content image (the image to be styled)',
+          description: 'Path to the content image (the image to be styled)',
         },
-        content_image_base64: {
+        style_image_path: {
           type: 'string',
-          description: 'Base64-encoded content image',
-        },
-        style_image_url: {
-          type: 'string',
-          description: 'URL of the style reference image',
-        },
-        style_image_base64: {
-          type: 'string',
-          description: 'Base64-encoded style reference image',
+          description: 'Path to the style reference image',
         },
         style_intensity: {
           type: 'number',
           description: 'How strongly to apply the style (0-1, default: 0.8)',
           default: 0.8,
         },
-        preserve_color: {
-          type: 'boolean',
-          description: 'Keep original colors while applying style texture',
-          default: false,
-        },
       },
-      required: [],
+      required: ['content_image_path', 'style_image_path'],
     },
   },
   {
     name: 'dzine_remove_background',
-    description: 'Remove the background from an image, leaving only the main subject with transparency.',
+    description: 'Remove the background from an image, leaving only the main subject.',
     inputSchema: {
       type: 'object',
       properties: {
-        image_url: {
+        image_path: {
           type: 'string',
-          description: 'URL of the image to process',
-        },
-        image_base64: {
-          type: 'string',
-          description: 'Base64-encoded image to process',
-        },
-        output_format: {
-          type: 'string',
-          enum: ['png', 'webp'],
-          description: 'Output image format (default: png)',
-          default: 'png',
+          description: 'Path to the image file',
         },
       },
-      required: [],
-    },
-  },
-  {
-    name: 'dzine_edit_image',
-    description: 'Edit an image using AI. Supports inpainting (fill areas), outpainting (extend image), object removal, and object replacement.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        image_url: {
-          type: 'string',
-          description: 'URL of the image to edit',
-        },
-        image_base64: {
-          type: 'string',
-          description: 'Base64-encoded image to edit',
-        },
-        prompt: {
-          type: 'string',
-          description: 'Description of what to add, change, or how to fill the edited area',
-        },
-        mask_url: {
-          type: 'string',
-          description: 'URL of the mask image (white = edit area, black = preserve)',
-        },
-        mask_base64: {
-          type: 'string',
-          description: 'Base64-encoded mask image',
-        },
-        edit_type: {
-          type: 'string',
-          enum: ['inpaint', 'outpaint', 'remove', 'replace'],
-          description: 'Type of edit to perform',
-          default: 'inpaint',
-        },
-      },
-      required: ['prompt'],
-    },
-  },
-  {
-    name: 'dzine_upscale',
-    description: 'Upscale an image to higher resolution using AI enhancement.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        image_url: {
-          type: 'string',
-          description: 'URL of the image to upscale',
-        },
-        image_base64: {
-          type: 'string',
-          description: 'Base64-encoded image to upscale',
-        },
-        scale: {
-          type: 'number',
-          enum: [2, 4],
-          description: 'Upscale factor (2x or 4x)',
-          default: 2,
-        },
-      },
-      required: [],
+      required: ['image_path'],
     },
   },
   {
@@ -251,25 +150,17 @@ const tools: Tool[] = [
     },
   },
   {
-    name: 'dzine_get_task_status',
-    description: 'Check the status of an async image generation task.',
+    name: 'dzine_screenshot',
+    description: 'Take a screenshot of the current DZINE browser state for debugging.',
     inputSchema: {
       type: 'object',
       properties: {
-        task_id: {
+        output_name: {
           type: 'string',
-          description: 'The task ID returned from a generation request',
+          description: 'Name for the screenshot file (without extension)',
+          default: 'dzine-screenshot',
         },
       },
-      required: ['task_id'],
-    },
-  },
-  {
-    name: 'dzine_get_account',
-    description: 'Get account information including remaining credits and plan details.',
-    inputSchema: {
-      type: 'object',
-      properties: {},
       required: [],
     },
   },
@@ -299,16 +190,59 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
   try {
     switch (name) {
+      case 'dzine_login': {
+        const isLoggedIn = await dzineBrowser.isLoggedIn();
+
+        if (isLoggedIn) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: '✅ You are logged in to DZINE AI and ready to generate images!',
+              },
+            ],
+          };
+        }
+
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `⚠️ Not logged in to DZINE AI.
+
+To log in with your Google account, run this command in your terminal:
+
+  cd ${process.cwd()} && npm run login
+
+This will open a browser window where you can log in with Google.
+Your session will be saved for future use.
+
+After logging in, try this tool again to confirm.`,
+            },
+          ],
+        };
+      }
+
       case 'dzine_text_to_image': {
-        const result = await dzineClient.textToImage({
+        const isLoggedIn = await dzineBrowser.isLoggedIn();
+        if (!isLoggedIn) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: '⚠️ Please log in first. Run: npm run login',
+              },
+            ],
+            isError: true,
+          };
+        }
+
+        const result = await dzineBrowser.textToImage({
           prompt: args?.prompt as string,
           negativePrompt: args?.negative_prompt as string | undefined,
           style: args?.style as string | undefined,
           width: args?.width as number | undefined,
           height: args?.height as number | undefined,
-          numImages: args?.num_images as number | undefined,
-          seed: args?.seed as number | undefined,
-          guidanceScale: args?.guidance_scale as number | undefined,
         });
 
         if (!result.success) {
@@ -316,11 +250,26 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             content: [
               {
                 type: 'text',
-                text: `Error generating image: ${result.error}`,
+                text: `❌ Error generating image: ${result.error}`,
               },
             ],
             isError: true,
           };
+        }
+
+        // Download images to output directory
+        const savedPaths: string[] = [];
+        if (result.imageUrls) {
+          for (let i = 0; i < result.imageUrls.length; i++) {
+            const url = result.imageUrls[i];
+            const filename = `generated-${Date.now()}-${i}.png`;
+            const outputPath = path.join(OUTPUT_DIR, filename);
+
+            const downloaded = await dzineBrowser.downloadImage(url, outputPath);
+            if (downloaded) {
+              savedPaths.push(outputPath);
+            }
+          }
         }
 
         return {
@@ -329,9 +278,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               type: 'text',
               text: JSON.stringify(
                 {
-                  message: 'Image generated successfully',
-                  images: result.data,
-                  taskId: result.taskId,
+                  message: '✅ Image generated successfully!',
+                  imageUrls: result.imageUrls,
+                  savedTo: savedPaths,
+                  outputDirectory: OUTPUT_DIR,
                 },
                 null,
                 2
@@ -342,14 +292,37 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'dzine_image_to_image': {
-        const result = await dzineClient.imageToImage({
+        const isLoggedIn = await dzineBrowser.isLoggedIn();
+        if (!isLoggedIn) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: '⚠️ Please log in first. Run: npm run login',
+              },
+            ],
+            isError: true,
+          };
+        }
+
+        const imagePath = args?.image_path as string;
+        if (!fs.existsSync(imagePath)) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: `❌ Image file not found: ${imagePath}`,
+              },
+            ],
+            isError: true,
+          };
+        }
+
+        const result = await dzineBrowser.imageToImage({
           prompt: args?.prompt as string,
-          imageUrl: args?.image_url as string | undefined,
-          imageBase64: args?.image_base64 as string | undefined,
-          negativePrompt: args?.negative_prompt as string | undefined,
+          imagePath,
           style: args?.style as string | undefined,
           strength: args?.strength as number | undefined,
-          seed: args?.seed as number | undefined,
         });
 
         if (!result.success) {
@@ -357,11 +330,26 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             content: [
               {
                 type: 'text',
-                text: `Error transforming image: ${result.error}`,
+                text: `❌ Error transforming image: ${result.error}`,
               },
             ],
             isError: true,
           };
+        }
+
+        // Download images
+        const savedPaths: string[] = [];
+        if (result.imageUrls) {
+          for (let i = 0; i < result.imageUrls.length; i++) {
+            const url = result.imageUrls[i];
+            const filename = `transformed-${Date.now()}-${i}.png`;
+            const outputPath = path.join(OUTPUT_DIR, filename);
+
+            const downloaded = await dzineBrowser.downloadImage(url, outputPath);
+            if (downloaded) {
+              savedPaths.push(outputPath);
+            }
+          }
         }
 
         return {
@@ -370,9 +358,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               type: 'text',
               text: JSON.stringify(
                 {
-                  message: 'Image transformed successfully',
-                  images: result.data,
-                  taskId: result.taskId,
+                  message: '✅ Image transformed successfully!',
+                  imageUrls: result.imageUrls,
+                  savedTo: savedPaths,
                 },
                 null,
                 2
@@ -383,13 +371,50 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'dzine_style_transfer': {
-        const result = await dzineClient.styleTransfer({
-          contentImageUrl: args?.content_image_url as string | undefined,
-          contentImageBase64: args?.content_image_base64 as string | undefined,
-          styleImageUrl: args?.style_image_url as string | undefined,
-          styleImageBase64: args?.style_image_base64 as string | undefined,
+        const isLoggedIn = await dzineBrowser.isLoggedIn();
+        if (!isLoggedIn) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: '⚠️ Please log in first. Run: npm run login',
+              },
+            ],
+            isError: true,
+          };
+        }
+
+        const contentPath = args?.content_image_path as string;
+        const stylePath = args?.style_image_path as string;
+
+        if (!fs.existsSync(contentPath)) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: `❌ Content image not found: ${contentPath}`,
+              },
+            ],
+            isError: true,
+          };
+        }
+
+        if (!fs.existsSync(stylePath)) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: `❌ Style image not found: ${stylePath}`,
+              },
+            ],
+            isError: true,
+          };
+        }
+
+        const result = await dzineBrowser.styleTransfer({
+          contentImagePath: contentPath,
+          styleImagePath: stylePath,
           styleIntensity: args?.style_intensity as number | undefined,
-          preserveColor: args?.preserve_color as boolean | undefined,
         });
 
         if (!result.success) {
@@ -397,11 +422,26 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             content: [
               {
                 type: 'text',
-                text: `Error applying style transfer: ${result.error}`,
+                text: `❌ Error applying style transfer: ${result.error}`,
               },
             ],
             isError: true,
           };
+        }
+
+        // Download images
+        const savedPaths: string[] = [];
+        if (result.imageUrls) {
+          for (let i = 0; i < result.imageUrls.length; i++) {
+            const url = result.imageUrls[i];
+            const filename = `style-transfer-${Date.now()}-${i}.png`;
+            const outputPath = path.join(OUTPUT_DIR, filename);
+
+            const downloaded = await dzineBrowser.downloadImage(url, outputPath);
+            if (downloaded) {
+              savedPaths.push(outputPath);
+            }
+          }
         }
 
         return {
@@ -410,9 +450,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               type: 'text',
               text: JSON.stringify(
                 {
-                  message: 'Style transfer applied successfully',
-                  images: result.data,
-                  taskId: result.taskId,
+                  message: '✅ Style transfer applied successfully!',
+                  imageUrls: result.imageUrls,
+                  savedTo: savedPaths,
                 },
                 null,
                 2
@@ -423,10 +463,34 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'dzine_remove_background': {
-        const result = await dzineClient.removeBackground({
-          imageUrl: args?.image_url as string | undefined,
-          imageBase64: args?.image_base64 as string | undefined,
-          outputFormat: args?.output_format as 'png' | 'webp' | undefined,
+        const isLoggedIn = await dzineBrowser.isLoggedIn();
+        if (!isLoggedIn) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: '⚠️ Please log in first. Run: npm run login',
+              },
+            ],
+            isError: true,
+          };
+        }
+
+        const imagePath = args?.image_path as string;
+        if (!fs.existsSync(imagePath)) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: `❌ Image file not found: ${imagePath}`,
+              },
+            ],
+            isError: true,
+          };
+        }
+
+        const result = await dzineBrowser.removeBackground({
+          imagePath,
         });
 
         if (!result.success) {
@@ -434,11 +498,26 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             content: [
               {
                 type: 'text',
-                text: `Error removing background: ${result.error}`,
+                text: `❌ Error removing background: ${result.error}`,
               },
             ],
             isError: true,
           };
+        }
+
+        // Download images
+        const savedPaths: string[] = [];
+        if (result.imageUrls) {
+          for (let i = 0; i < result.imageUrls.length; i++) {
+            const url = result.imageUrls[i];
+            const filename = `no-background-${Date.now()}-${i}.png`;
+            const outputPath = path.join(OUTPUT_DIR, filename);
+
+            const downloaded = await dzineBrowser.downloadImage(url, outputPath);
+            if (downloaded) {
+              savedPaths.push(outputPath);
+            }
+          }
         }
 
         return {
@@ -447,86 +526,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               type: 'text',
               text: JSON.stringify(
                 {
-                  message: 'Background removed successfully',
-                  images: result.data,
-                  taskId: result.taskId,
-                },
-                null,
-                2
-              ),
-            },
-          ],
-        };
-      }
-
-      case 'dzine_edit_image': {
-        const result = await dzineClient.editImage({
-          imageUrl: args?.image_url as string | undefined,
-          imageBase64: args?.image_base64 as string | undefined,
-          prompt: args?.prompt as string,
-          maskUrl: args?.mask_url as string | undefined,
-          maskBase64: args?.mask_base64 as string | undefined,
-          editType: args?.edit_type as 'inpaint' | 'outpaint' | 'remove' | 'replace' | undefined,
-        });
-
-        if (!result.success) {
-          return {
-            content: [
-              {
-                type: 'text',
-                text: `Error editing image: ${result.error}`,
-              },
-            ],
-            isError: true,
-          };
-        }
-
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify(
-                {
-                  message: 'Image edited successfully',
-                  images: result.data,
-                  taskId: result.taskId,
-                },
-                null,
-                2
-              ),
-            },
-          ],
-        };
-      }
-
-      case 'dzine_upscale': {
-        const result = await dzineClient.upscaleImage({
-          imageUrl: args?.image_url as string | undefined,
-          imageBase64: args?.image_base64 as string | undefined,
-          scale: args?.scale as 2 | 4 | undefined,
-        });
-
-        if (!result.success) {
-          return {
-            content: [
-              {
-                type: 'text',
-                text: `Error upscaling image: ${result.error}`,
-              },
-            ],
-            isError: true,
-          };
-        }
-
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify(
-                {
-                  message: 'Image upscaled successfully',
-                  images: result.data,
-                  taskId: result.taskId,
+                  message: '✅ Background removed successfully!',
+                  imageUrls: result.imageUrls,
+                  savedTo: savedPaths,
                 },
                 null,
                 2
@@ -537,19 +539,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'dzine_get_styles': {
-        const result = await dzineClient.getStyles();
-
-        if (!result.success) {
-          return {
-            content: [
-              {
-                type: 'text',
-                text: `Error fetching styles: ${result.error}`,
-              },
-            ],
-            isError: true,
-          };
-        }
+        const styles = await dzineBrowser.getStyles();
 
         return {
           content: [
@@ -557,8 +547,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               type: 'text',
               text: JSON.stringify(
                 {
-                  message: 'Available styles retrieved',
-                  styles: result.data,
+                  message: 'Available styles',
+                  styles: styles.length > 0 ? styles : 'Could not retrieve styles. Please ensure you are logged in.',
                 },
                 null,
                 2
@@ -568,15 +558,18 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       }
 
-      case 'dzine_get_task_status': {
-        const result = await dzineClient.getTaskStatus(args?.task_id as string);
+      case 'dzine_screenshot': {
+        const outputName = (args?.output_name as string) || 'dzine-screenshot';
+        const screenshotPath = path.join(OUTPUT_DIR, `${outputName}.png`);
 
-        if (!result.success) {
+        const success = await dzineBrowser.screenshot(screenshotPath);
+
+        if (!success) {
           return {
             content: [
               {
                 type: 'text',
-                text: `Error fetching task status: ${result.error}`,
+                text: '❌ Failed to take screenshot',
               },
             ],
             isError: true,
@@ -587,39 +580,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           content: [
             {
               type: 'text',
-              text: JSON.stringify(result.data, null, 2),
-            },
-          ],
-        };
-      }
-
-      case 'dzine_get_account': {
-        const result = await dzineClient.getAccountInfo();
-
-        if (!result.success) {
-          return {
-            content: [
-              {
-                type: 'text',
-                text: `Error fetching account info: ${result.error}`,
-              },
-            ],
-            isError: true,
-          };
-        }
-
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify(
-                {
-                  message: 'Account information retrieved',
-                  account: result.data,
-                },
-                null,
-                2
-              ),
+              text: `✅ Screenshot saved to: ${screenshotPath}`,
             },
           ],
         };
@@ -649,11 +610,22 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   }
 });
 
+// Cleanup on exit
+process.on('SIGINT', async () => {
+  await dzineBrowser.close();
+  process.exit(0);
+});
+
+process.on('SIGTERM', async () => {
+  await dzineBrowser.close();
+  process.exit(0);
+});
+
 // Start the server
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error('DZINE MCP Server running on stdio');
+  console.error('DZINE MCP Server (Playwright) running on stdio');
 }
 
 main().catch((error) => {
